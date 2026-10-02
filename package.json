@@ -1,0 +1,15 @@
+{
+  "name": "send-flow",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install && npm --prefix web install && npm --prefix functions install",
+    "emulators": "npm --prefix functions run build && firebase emulators:exec --ui --project demo-sendflow \"node functions/lib/dev/localScheduler.js\"",
+    "dev": "npm --prefix web run dev:emulators",
+    "test": "npm --prefix web test && npm --prefix functions test",
+    "build": "npm --prefix web run build && npm --prefix functions run build",
+    "deploy": "firebase deploy"
+  },
+  "devDependencies": {
+    "firebase-tools": "^15.32.1"
+  }
+}
