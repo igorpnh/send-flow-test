@@ -156,3 +156,10 @@ npm --prefix functions test         # scheduler, retrato dos destinatários e tr
 ```
 
 Os testes de rules e de Functions sobem o emulador do Firestore sozinhos (`firebase emulators:exec`).
+
+## Deploy contínuo (GitHub Actions)
+
+O workflow `.github/workflows/deploy.yml` publica o projeto automaticamente:
+
+- **Pull request para a `main`:** roda lint, testes unitários, build, testes das Security Rules e testes das Functions (com o emulador do Firestore).
+- **Push na `main`:** roda as mesmas verificações e, se todas passarem, executa `firebase deploy` (rules, índices, Functions e Hosting).
