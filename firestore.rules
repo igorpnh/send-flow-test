@@ -1,0 +1,148 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(data) {
+      return isSignedIn() && data.tenantId == request.auth.uid;
+    }
+
+    function ownsConnection(connectionId) {
+      let path = /databases/$(database)/documents/connections/$(connectionId);
+      return connectionId is string
+        && exists(path)
+        && get(path).data.tenantId == request.auth.uid;
+    }
+
+    function hasExactly(fields) {
+      return request.resource.data.keys().hasAll(fields)
+        && request.resource.data.keys().hasOnly(fields);
+    }
+
+    function onlyChanges(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+    }
+
+    function isCreatedNow() {
+      return request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function isUpdatedNow() {
+      return request.resource.data.updatedAt == request.time;
+    }
+
+    function isValidText(value, maxSize) {
+      return value is string && value.trim().size() > 0 && value.size() <= maxSize;
+    }
+
+    match /connections/{connectionId} {
+      allow read, delete: if isOwner(resource.data);
+
+      allow create: if isOwner(request.resource.data)
+        && hasExactly(['tenantId', 'name', 'createdAt', 'updatedAt'])
+        && isValidText(request.resource.data.name, 80)
+        && isCreatedNow();
+
+      allow update: if isOwner(resource.data)
+        && onlyChanges(['name', 'updatedAt'])
+        && isValidText(request.resource.data.name, 80)
+        && isUpdatedNow();
+    }
+
+    function isValidContact(data) {
+      return isValidText(data.name, 80)
+        && data.phone is string
+        && data.phone.matches('^\\+55[0-9]{10,11}$');
+    }
+
+    function contactPath(contactId) {
+      return /databases/$(database)/documents/contacts/$(contactId);
+    }
+
+    function phoneLockId(contact) {
+      return contact.connectionId + '_' + contact.phone;
+    }
+
+    function holdsPhoneLock(contactId, contact) {
+      let lock = /databases/$(database)/documents/contactPhones/$(phoneLockId(contact));
+      return existsAfter(lock) && getAfter(lock).data.contactId == contactId;
+    }
+
+    match /contacts/{contactId} {
+      allow read: if isOwner(resource.data);
+
+      allow create: if isOwner(request.resource.data)
+        && hasExactly(['tenantId', 'connectionId', 'name', 'phone', 'createdAt', 'updatedAt'])
+        && ownsConnection(request.resource.data.connectionId)
+        && isValidContact(request.resource.data)
+        && holdsPhoneLock(contactId, request.resource.data)
+        && isCreatedNow();
+
+      allow update: if isOwner(resource.data)
+        && onlyChanges(['name', 'phone', 'updatedAt'])
+        && isValidContact(request.resource.data)
+        && (request.resource.data.phone == resource.data.phone || holdsPhoneLock(contactId, request.resource.data))
+        && isUpdatedNow();
+
+      allow delete: if isOwner(resource.data);
+    }
+
+    match /contactPhones/{lockId} {
+      allow create: if isOwner(request.resource.data)
+        && hasExactly(['tenantId', 'contactId'])
+        && existsAfter(contactPath(request.resource.data.contactId))
+        && getAfter(contactPath(request.resource.data.contactId)).data.tenantId == request.auth.uid
+        && phoneLockId(getAfter(contactPath(request.resource.data.contactId)).data) == lockId;
+
+      allow delete: if resource == null
+        || (isOwner(resource.data)
+          && (!existsAfter(contactPath(resource.data.contactId))
+            || phoneLockId(getAfter(contactPath(resource.data.contactId)).data) != lockId));
+    }
+
+    function isValidMessageContent(data) {
+      return isValidText(data.body, 1000)
+        && data.contactIds is list
+        && data.contactIds.size() > 0
+        && data.contactIds.size() <= 500
+        && data.recipients is list
+        && data.recipients.size() == data.contactIds.size()
+        && data.recipients[0].keys().hasOnly(['id', 'name', 'phone']);
+    }
+
+    function isFutureTimestamp(value) {
+      return value is timestamp && value > request.time;
+    }
+
+    function hasValidInitialStatus(data) {
+      return (data.status == 'sent' && data.sentAt == request.time && data.scheduledAt == null)
+        || (data.status == 'scheduled' && isFutureTimestamp(data.scheduledAt) && data.sentAt == null);
+    }
+
+    match /messages/{messageId} {
+      allow read, delete: if isOwner(resource.data);
+
+      allow create: if isOwner(request.resource.data)
+        && hasExactly([
+          'tenantId', 'connectionId', 'contactIds', 'recipients', 'body', 'status',
+          'scheduledAt', 'sentAt', 'createdAt', 'updatedAt'
+        ])
+        && ownsConnection(request.resource.data.connectionId)
+        && isValidMessageContent(request.resource.data)
+        && hasValidInitialStatus(request.resource.data)
+        && isCreatedNow();
+
+      allow update: if isOwner(resource.data)
+        && resource.data.status == 'scheduled'
+        && onlyChanges(['contactIds', 'recipients', 'body', 'scheduledAt', 'updatedAt'])
+        && isValidMessageContent(request.resource.data)
+        && isFutureTimestamp(request.resource.data.scheduledAt)
+        && isUpdatedNow();
+    }
+  }
+}
